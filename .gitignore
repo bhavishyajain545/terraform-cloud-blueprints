@@ -1,0 +1,27 @@
+# Terraform working files
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Real variable files may contain environment specifics - only *.example is committed
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Lock files are committed for root modules (envs/) only
+modules/**/.terraform.lock.hcl
+
+# Tooling
+.tflint.d/
+.infracost/
+.DS_Store

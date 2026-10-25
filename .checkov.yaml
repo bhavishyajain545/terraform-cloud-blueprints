@@ -1,0 +1,14 @@
+# Checkov configuration used locally, in pre-commit and in CI.
+# Open-source Checkov has no severity data (that needs a Prisma Cloud key), so instead of
+# "fail on HIGH" every failed check fails the build. Accepted risks are skipped inline with
+#   #checkov:skip=<ID>:<reason>
+# next to the resource, so the justification is reviewed together with the code.
+framework:
+  - terraform
+directory:
+  - .
+skip-path:
+  - \.terraform
+compact: true
+quiet: true
+download-external-modules: false
