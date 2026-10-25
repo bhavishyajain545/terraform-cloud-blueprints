@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (git-ignored) and adjust. Placeholder values only.
+
+region              = "eu-west-1"
+allowed_account_ids = ["111122223333"]
+name                = "blueprint-dev"
+vpc_cidr            = "10.50.0.0/16"
+az_suffixes         = ["a", "b", "c"]
+kubernetes_version  = "1.35"
+
+# Private-only API by default. To open the public endpoint to specific CIDRs:
+# endpoint_public_access       = true
+# endpoint_public_access_cidrs = ["198.51.100.10/32"]
+
+# Role assumed by humans that should be cluster-admin (e.g. an IAM Identity Center role).
+cluster_admin_role_arn = "arn:aws:iam::111122223333:role/platform-admins"
