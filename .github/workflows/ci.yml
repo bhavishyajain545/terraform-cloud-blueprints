@@ -1,0 +1,150 @@
+name: ci
+
+# Everything here runs without cloud credentials: providers are mocked in `terraform test`,
+# `validate` runs with -backend=false, linters/scanners are static. Zero cost, zero secrets.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.16.7"
+  TFLINT_VERSION: "v0.65.0"
+  TERRAFORM_DOCS_VERSION: "v0.24.0"
+  CHECKOV_VERSION: "3.3.30"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  CHECKPOINT_DISABLE: "1"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff
+
+  test:
+    name: validate + test (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - modules/azure-network
+          - modules/azure-aks
+          - modules/aws-vpc
+          - modules/aws-eks
+          - envs/azure-dev
+          - envs/aws-dev
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform.d/plugin-cache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: Provider cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ runner.os }}-${{ hashFiles(format('{0}/versions.tf', matrix.dir), format('{0}/.terraform.lock.hcl', matrix.dir)) }}
+      - run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+      - name: terraform init
+        run: terraform init -backend=false
+      - name: terraform validate
+        run: terraform validate
+      - name: terraform test (mock providers)
+        run: terraform test -verbose
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ runner.os }}-${{ hashFiles('.tflint.hcl') }}
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+      - name: tflint --init
+        run: tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: tflint (azurerm + aws rulesets, all modules and envs)
+        run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install checkov
+        run: pip install --quiet "checkov==${CHECKOV_VERSION}"
+      - name: checkov (fails on any unskipped finding)
+        run: checkov --config-file .checkov.yaml
+
+  docs:
+    name: terraform-docs up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install terraform-docs (checksum verified)
+        run: |
+          set -euo pipefail
+          base="https://github.com/terraform-docs/terraform-docs/releases/download/${TERRAFORM_DOCS_VERSION}"
+          tarball="terraform-docs-${TERRAFORM_DOCS_VERSION}-linux-amd64.tar.gz"
+          curl -fsSLO "${base}/${tarball}"
+          curl -fsSLO "${base}/terraform-docs-${TERRAFORM_DOCS_VERSION}.sha256sum"
+          grep " ${tarball}\$" "terraform-docs-${TERRAFORM_DOCS_VERSION}.sha256sum" | sha256sum -c -
+          tar -xzf "${tarball}" terraform-docs
+          sudo install terraform-docs /usr/local/bin/
+      - name: Check generated docs
+        run: |
+          for d in modules/* envs/*; do
+            terraform-docs --config .terraform-docs.yml --output-check "$d"
+          done
+
+  infracost:
+    name: infracost (optional)
+    runs-on: ubuntu-latest
+    env:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+    steps:
+      - name: Skip when no INFRACOST_API_KEY secret is configured
+        if: env.INFRACOST_API_KEY == ''
+        run: echo "::notice title=infracost::INFRACOST_API_KEY secret not set - cost estimate skipped."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.INFRACOST_API_KEY != ''
+      - uses: infracost/actions/setup@a5783eb98adc93aa7a0049fce0abb06fdd30770a # v5.0.1
+        if: env.INFRACOST_API_KEY != ''
+        with:
+          api-key: ${{ env.INFRACOST_API_KEY }}
+      - name: Cost estimate per environment
+        if: env.INFRACOST_API_KEY != ''
+        run: |
+          for env in envs/azure-dev envs/aws-dev; do
+            infracost breakdown --path "$env" --format table
+          done
